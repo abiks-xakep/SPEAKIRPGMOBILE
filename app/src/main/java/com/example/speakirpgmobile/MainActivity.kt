@@ -14,21 +14,40 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var root: FrameLayout
     private lateinit var joystick: JoystickView
+    private lateinit var attackButton: Button
+    private lateinit var menuButton: Button
     private lateinit var utilityPanel: GridLayout
+    private lateinit var editPanel: LinearLayout
+    private lateinit var editLabel: TextView
 
     private val heldKeys = mutableSetOf<WebKey>()
+
+    private val hudPrefs by lazy {
+        getSharedPreferences("hud_layout", MODE_PRIVATE)
+    }
+
+    private var editMode = false
+    private var selectedHudView: View? = null
+    private var selectedHudKey: String? = null
+    private var dragStartRawX = 0f
+    private var dragStartRawY = 0f
+    private var dragStartX = 0f
+    private var dragStartY = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hideSystemUi()
 
-        val root = FrameLayout(this).apply {
+        root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
 
@@ -50,33 +69,69 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(
             joystick,
-            FrameLayout.LayoutParams(dp(138), dp(138)).apply {
-                gravity = Gravity.BOTTOM or Gravity.START
-                leftMargin = dp(18)
-                bottomMargin = dp(112)
-            }
+            FrameLayout.LayoutParams(dp(138), dp(138))
         )
 
+        restoreHudView(
+            joystick,
+            "joystick",
+            defaultX = dp(18).toFloat(),
+            defaultYFromBottom = dp(112).toFloat(),
+            defaultAlpha = 0.70f
+        )
+
+        joystick.setOnTouchListener { view, event ->
+            if (editMode) {
+                handleHudEditTouch(view, "joystick", event)
+            } else {
+                false
+            }
+        }
+
         // Permanent SPACE button for basic/auto attack.
-        val attack = makeHoldButton(
-            "⚔\nSPACE",
-            WebKey(" ", "Space")
-        ).apply {
+        attackButton = Button(this).apply {
+            text = "⚔\nSPACE"
             textSize = 13f
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            setBackgroundColor(0x99000000.toInt())
             alpha = 0.78f
         }
 
         root.addView(
-            attack,
-            FrameLayout.LayoutParams(dp(88), dp(88)).apply {
-                gravity = Gravity.CENTER_VERTICAL or Gravity.END
-                rightMargin = dp(20)
-                topMargin = dp(95)
-            }
+            attackButton,
+            FrameLayout.LayoutParams(dp(88), dp(88))
         )
 
+        restoreHudView(
+            attackButton,
+            "space",
+            defaultXFromRight = dp(20).toFloat(),
+            defaultYFraction = 0.52f,
+            defaultAlpha = 0.78f
+        )
+
+        attackButton.setOnTouchListener { view, event ->
+            if (editMode) {
+                handleHudEditTouch(view, "space", event)
+            } else {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        sendKey(WebKey(" ", "Space"), true)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        sendKey(WebKey(" ", "Space"), false)
+                        true
+                    }
+                    else -> true
+                }
+            }
+        }
+
         // Hamburger menu.
-        val menuButton = Button(this).apply {
+        menuButton = Button(this).apply {
             text = "☰"
             textSize = 21f
             setTextColor(Color.WHITE)
@@ -84,23 +139,29 @@ class MainActivity : AppCompatActivity() {
             alpha = 0.82f
 
             setOnClickListener {
-                utilityPanel.visibility =
-                    if (utilityPanel.visibility == View.VISIBLE) {
-                        View.GONE
-                    } else {
-                        View.VISIBLE
-                    }
+                if (!editMode) {
+                    utilityPanel.visibility =
+                        if (utilityPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                }
             }
         }
 
         root.addView(
             menuButton,
-            FrameLayout.LayoutParams(dp(56), dp(52)).apply {
-                gravity = Gravity.TOP or Gravity.END
-                topMargin = dp(12)
-                rightMargin = dp(14)
-            }
+            FrameLayout.LayoutParams(dp(56), dp(52))
         )
+
+        restoreHudView(
+            menuButton,
+            "menu",
+            defaultXFromRight = dp(14).toFloat(),
+            defaultY = dp(12).toFloat(),
+            defaultAlpha = 0.82f
+        )
+
+        menuButton.setOnTouchListener { view, event ->
+            if (editMode) handleHudEditTouch(view, "menu", event) else false
+        }
 
         utilityPanel = buildUtilityPanel()
         utilityPanel.visibility = View.GONE
@@ -114,6 +175,19 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.TOP or Gravity.END
                 topMargin = dp(70)
                 rightMargin = dp(14)
+            }
+        )
+
+        editPanel = buildHudEditPanel()
+        editPanel.visibility = View.GONE
+        root.addView(
+            editPanel,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = dp(10)
             }
         )
 
@@ -940,7 +1014,249 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
+        val editHudButton = Button(this).apply {
+            text = "Edit\nHUD"
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            setPadding(0, 0, 0, 0)
+            setBackgroundColor(0xAA555555.toInt())
+            setOnClickListener {
+                utilityPanel.visibility = View.GONE
+                enterHudEditMode()
+            }
+        }
+
+        panel.addView(
+            editHudButton,
+            GridLayout.LayoutParams().apply {
+                width = dp(76)
+                height = dp(58)
+                setMargins(dp(2), dp(2), dp(2), dp(2))
+            }
+        )
+
         return panel
+    }
+
+    private fun buildHudEditPanel(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), dp(4), dp(5), dp(4))
+            setBackgroundColor(0xDD111111.toInt())
+
+            editLabel = TextView(this@MainActivity).apply {
+                text = "Tap a control"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                gravity = Gravity.CENTER
+            }
+            addView(editLabel, LinearLayout.LayoutParams(dp(95), dp(42)))
+
+            addView(hudEditorButton("−") { resizeSelectedHud(0.90f) })
+            addView(hudEditorButton("+") { resizeSelectedHud(1.10f) })
+            addView(hudEditorButton("α−") { changeSelectedHudAlpha(-0.10f) })
+            addView(hudEditorButton("α+") { changeSelectedHudAlpha(0.10f) })
+            addView(hudEditorButton("Reset", 64) { resetHudLayout() })
+            addView(hudEditorButton("Done", 60) { exitHudEditMode() })
+        }
+    }
+
+    private fun hudEditorButton(label: String, widthDp: Int = 46, action: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            setPadding(0, 0, 0, 0)
+            setBackgroundColor(0xAA333333.toInt())
+            setOnClickListener { action() }
+            layoutParams = LinearLayout.LayoutParams(dp(widthDp), dp(42))
+        }
+    }
+
+    private fun enterHudEditMode() {
+        editMode = true
+        selectedHudView = null
+        selectedHudKey = null
+        setHeldKeys(emptySet())
+        editLabel.text = "Tap a control"
+        editPanel.visibility = View.VISIBLE
+    }
+
+    private fun exitHudEditMode() {
+        saveHudView(joystick, "joystick")
+        saveHudView(attackButton, "space")
+        saveHudView(menuButton, "menu")
+        editMode = false
+        selectedHudView = null
+        selectedHudKey = null
+        editPanel.visibility = View.GONE
+    }
+
+    private fun handleHudEditTouch(view: View, key: String, event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                selectedHudView = view
+                selectedHudKey = key
+                editLabel.text = when (key) {
+                    "joystick" -> "Joystick"
+                    "space" -> "SPACE"
+                    "menu" -> "Menu ☰"
+                    else -> key
+                }
+                dragStartRawX = event.rawX
+                dragStartRawY = event.rawY
+                dragStartX = view.x
+                dragStartY = view.y
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val x = dragStartX + (event.rawX - dragStartRawX)
+                val y = dragStartY + (event.rawY - dragStartRawY)
+                val maxX = (root.width - view.width).coerceAtLeast(0).toFloat()
+                val maxY = (root.height - view.height).coerceAtLeast(0).toFloat()
+                view.x = x.coerceIn(0f, maxX)
+                view.y = y.coerceIn(0f, maxY)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                saveHudView(view, key)
+                return true
+            }
+        }
+        return true
+    }
+
+    private fun resizeSelectedHud(factor: Float) {
+        val view = selectedHudView ?: return
+        val key = selectedHudKey ?: return
+        if (view.width <= 0 || view.height <= 0) return
+
+        val minWidth = when (key) {
+            "joystick" -> dp(70)
+            "space" -> dp(48)
+            "menu" -> dp(40)
+            else -> dp(40)
+        }
+        val maxWidth = when (key) {
+            "joystick" -> dp(240)
+            "space" -> dp(170)
+            "menu" -> dp(110)
+            else -> dp(200)
+        }
+        val ratio = view.height.toFloat() / view.width.toFloat()
+        val newWidth = (view.width * factor).toInt().coerceIn(minWidth, maxWidth)
+        val newHeight = (newWidth * ratio).toInt().coerceAtLeast(dp(36))
+
+        view.layoutParams = view.layoutParams.apply {
+            width = newWidth
+            height = newHeight
+        }
+        view.requestLayout()
+        view.post {
+            clampHudView(view)
+            saveHudView(view, key)
+        }
+    }
+
+    private fun changeSelectedHudAlpha(delta: Float) {
+        val view = selectedHudView ?: return
+        val key = selectedHudKey ?: return
+        view.alpha = (view.alpha + delta).coerceIn(0.20f, 1.00f)
+        saveHudView(view, key)
+    }
+
+    private fun saveHudView(view: View, key: String) {
+        if (view.width <= 0 || view.height <= 0) return
+        hudPrefs.edit()
+            .putFloat("${key}_x", view.x)
+            .putFloat("${key}_y", view.y)
+            .putInt("${key}_w", view.width)
+            .putInt("${key}_h", view.height)
+            .putFloat("${key}_alpha", view.alpha)
+            .apply()
+    }
+
+    private fun restoreHudView(
+        view: View,
+        key: String,
+        defaultX: Float? = null,
+        defaultY: Float? = null,
+        defaultXFromRight: Float? = null,
+        defaultYFromBottom: Float? = null,
+        defaultYFraction: Float? = null,
+        defaultAlpha: Float
+    ) {
+        view.post {
+            val w = hudPrefs.getInt("${key}_w", view.width)
+            val h = hudPrefs.getInt("${key}_h", view.height)
+            if (w > 0 && h > 0) {
+                view.layoutParams = view.layoutParams.apply {
+                    width = w
+                    height = h
+                }
+                view.requestLayout()
+            }
+            view.post {
+                val fallbackX = when {
+                    defaultX != null -> defaultX
+                    defaultXFromRight != null -> root.width - view.width - defaultXFromRight
+                    else -> 0f
+                }
+                val fallbackY = when {
+                    defaultY != null -> defaultY
+                    defaultYFromBottom != null -> root.height - view.height - defaultYFromBottom
+                    defaultYFraction != null -> (root.height - view.height) * defaultYFraction
+                    else -> 0f
+                }
+                view.x = hudPrefs.getFloat("${key}_x", fallbackX)
+                view.y = hudPrefs.getFloat("${key}_y", fallbackY)
+                view.alpha = hudPrefs.getFloat("${key}_alpha", defaultAlpha)
+                clampHudView(view)
+            }
+        }
+    }
+
+    private fun clampHudView(view: View) {
+        val maxX = (root.width - view.width).coerceAtLeast(0).toFloat()
+        val maxY = (root.height - view.height).coerceAtLeast(0).toFloat()
+        view.x = view.x.coerceIn(0f, maxX)
+        view.y = view.y.coerceIn(0f, maxY)
+    }
+
+    private fun resetHudLayout() {
+        hudPrefs.edit().clear().apply()
+
+        joystick.layoutParams = joystick.layoutParams.apply {
+            width = dp(138); height = dp(138)
+        }
+        attackButton.layoutParams = attackButton.layoutParams.apply {
+            width = dp(88); height = dp(88)
+        }
+        menuButton.layoutParams = menuButton.layoutParams.apply {
+            width = dp(56); height = dp(52)
+        }
+        joystick.alpha = 0.70f
+        attackButton.alpha = 0.78f
+        menuButton.alpha = 0.82f
+        joystick.requestLayout()
+        attackButton.requestLayout()
+        menuButton.requestLayout()
+
+        root.post {
+            joystick.x = dp(18).toFloat()
+            joystick.y = (root.height - joystick.height - dp(112)).toFloat()
+            attackButton.x = (root.width - attackButton.width - dp(20)).toFloat()
+            attackButton.y = (root.height - attackButton.height) * 0.52f
+            menuButton.x = (root.width - menuButton.width - dp(14)).toFloat()
+            menuButton.y = dp(12).toFloat()
+            selectedHudView = null
+            selectedHudKey = null
+            editLabel.text = "Tap a control"
+        }
     }
 
     private fun makeTapButton(
@@ -1227,6 +1543,11 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        if (editMode) {
+            exitHudEditMode()
+            return
+        }
+
         if (
             ::utilityPanel.isInitialized &&
             utilityPanel.visibility == View.VISIBLE
