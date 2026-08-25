@@ -1,4 +1,4 @@
-#DEPRECATED! Due to the official developer adding a mobile interface directly into the browser, this repository has been abandoned. Updates will only be provided in exceptional cases upon request.
+# **DEPRECATED! Due to the official developer adding a mobile interface directly into the browser, this repository has been abandoned. Updates will only be provided in exceptional cases upon request.**
 
 
 
