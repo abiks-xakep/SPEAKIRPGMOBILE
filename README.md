@@ -1,3 +1,8 @@
+#DEPRECATED! Due to the official developer adding a mobile interface directly into the browser, this repository has been abandoned. Updates will only be provided in exceptional cases upon request.
+
+
+
+
 # SpeakiRPG Mobile
 
 An unofficial Android client for **SpeakiRPG** focused on making the desktop-only web game playable on touch devices.
