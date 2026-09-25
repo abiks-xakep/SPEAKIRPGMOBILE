@@ -223,6 +223,8 @@ These are **not implemented yet**:
 - User-configurable hotkey mapping
 - Improved chat / soft-keyboard integration
 - Experimental enemy/entity inspection
+- Get password support for recovery key
+- UI UPGRADE
 
 ## Disclaimer
 
